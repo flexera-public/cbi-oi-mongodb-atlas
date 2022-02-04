@@ -1,0 +1,5 @@
+.vscode/
+/mongodbatlascbi*
+groups.json
+invoices.json
+invoice-*.json

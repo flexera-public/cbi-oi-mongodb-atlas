@@ -1,2 +1,1 @@
-# cbi-oi-mongodb-atlas
-MongoDB Atlas CBI Upload
+# MongoDB Atlas CBI Upload
