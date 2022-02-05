@@ -3,3 +3,4 @@
 groups.json
 invoices.json
 invoice-*.json
+bill-*.csv

@@ -13,6 +13,7 @@ const (
 	GroupsJSON     = "groups.json"
 	InvoicesJSON   = "invoices.json"
 	InvoiceJSONFmt = "invoice-%v.json"
+	BillCSVFmt     = "bill-%v.csv"
 )
 
 type CLI struct {
@@ -23,6 +24,7 @@ type CLI struct {
 	AtlasPrivateKey string   `help:"Set the MongoDB Atlas API private key." required:"" env:"MONGODB_ATLAS_PRIVATE_KEY" short:"P"`
 
 	Download Download `cmd:"" help:"Download JSON billing files from the MongoDB Atlas API."`
+	Convert  Convert  `cmd:"" help:"Convert JSON billing files for MongoDB Atlas to the CBI CSV format."`
 
 	atlasClient mongodbatlas.Client
 }
