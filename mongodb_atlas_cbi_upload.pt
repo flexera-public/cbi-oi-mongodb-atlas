@@ -1,0 +1,78 @@
+name 'MongoDB Atlas CBI Upload'
+rs_pt_ver 20180301
+short_description 'Translate MongoDB Atlas invoices to the Flexera Common Bill Ingest CVS format and upload it into the platform.'
+default_frequency 'daily'
+category 'Cost'
+info(
+  version: '1.0',
+  provider: 'MongoDB Atlas',
+)
+
+parameter 'param_emails' do
+  type 'list'
+  label 'Email Addresses'
+  category 'Notification'
+  description 'The list of email addresses to notify'
+end
+
+parameter 'param_mongodb_atlas_org_id' do
+  type 'string'
+  label 'MongoDB Atlas Organization ID'
+  category 'MongoDB Atlas'
+  description 'The ID of the MongoDB Atlas organization for downloading invoices'
+  allowed_pattern /^[0-9a-f]{24}$/i
+end
+
+parameter 'param_months' do
+  type 'number'
+  label 'Months'
+  category 'MongoDB Atlas'
+  description 'The number of months back for downloading invoices'
+  default 3
+  min_value 1
+end
+
+parameter 'param_bill_connect_id' do
+  type 'string'
+  label 'Bill Connect ID'
+  category 'Flexera'
+  description 'The ID of the CBI Bill Connect for uploading bills'
+  allowed_pattern /^cbi-oi-optima-[-_0-9a-zA-Z]{1,20}$/
+end
+
+credentials 'creds_mongodb_atlas' do
+  schemes 'digest'
+  label 'MongoDB Atlas'
+  description 'The credentials to authenticate API calls to download invoices'
+  tags 'provider=mongodb_atlas'
+end
+
+credentials 'creds_flexera' do
+  schemes 'oauth2'
+  label 'Flexera'
+  description 'The credentials to authenticate API calls to upload bills'
+  tags 'provider=flexera'
+end
+
+pagination 'pagination_mongodb_atlas' do
+  get_page_marker do
+    body_path jq(response, '.links[] | select(.rel == "next").href')
+  end
+  set_page_marker do
+    uri true
+  end
+end
+
+datasource 'ds_mongodb_atlas_org_groups' do
+  request do
+    auth $creds_mongodb_atlas
+    pagination $pagination_mongodb_atlas
+    host 'cloud.mongodb.com'
+    path join(['/api/atlas/v1.0/orgs/', param_mongodb_atlas_org_id, '/groups'])
+    query 'itemsPerPage', 500
+    query 'includeCount', false
+  end
+end
+
+policy 'mongodb_atlas_cbi_upload' do
+end
