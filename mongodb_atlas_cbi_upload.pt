@@ -47,12 +47,14 @@ credentials 'creds_mongodb_atlas' do
   tags 'provider=mongodb_atlas'
 end
 
+=begin
 credentials 'creds_flexera' do
   schemes 'oauth2'
   label 'Flexera'
   description 'The credentials to authenticate API calls to upload bills'
   tags 'provider=flexera'
 end
+=end
 
 pagination 'pagination_mongodb_atlas' do
   get_page_marker do
@@ -68,9 +70,8 @@ datasource 'ds_mongodb_atlas_org_groups' do
     auth $creds_mongodb_atlas
     pagination $pagination_mongodb_atlas
     host 'cloud.mongodb.com'
-    path join(['/api/atlas/v1.0/orgs/', param_mongodb_atlas_org_id, '/groups'])
-    query 'itemsPerPage', 500
-    query 'includeCount', false
+    path join(['/api/atlas/v1.0/orgs/', $param_mongodb_atlas_org_id, '/groups'])
+    query 'itemsPerPage', '500'
   end
 end
 
