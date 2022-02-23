@@ -73,7 +73,20 @@ datasource 'ds_mongodb_atlas_org_groups' do
     path join(['/api/atlas/v1.0/orgs/', $param_mongodb_atlas_org_id, '/groups'])
     query 'itemsPerPage', '500'
   end
+  result do
+    collect jq(response, '.results[]') do
+      field 'id', from(col_item)
+      field 'name', from(col_item)
+    end
+  end
 end
 
 policy 'mongodb_atlas_cbi_upload' do
+  validate $ds_mongodb_atlas_org_groups do
+    summary_template '{{ data | len }} MongoDB Atlas project(s)'
+    detail_template <<-'EOS'
+There are/is {{ data | len }} MongoDB Atlas project(s)!
+EOS
+    check eq(size(data), 0)
+  end
 end
