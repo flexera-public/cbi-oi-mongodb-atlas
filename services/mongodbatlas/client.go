@@ -50,7 +50,7 @@ type (
 		EndDate          time.Time `json:"endDate"`
 		GroupID          string    `json:"groupId"`
 		ClusterName      string    `json:"clusterName"`
-		Note             string    `json:"string"`
+		Note             string    `json:"note"`
 		SKU              string    `json:"sku"`
 		DiscountCents    float64   `json:"discountCents"`
 		PrecentDiscount  float64   `json:"percentDiscount"`
