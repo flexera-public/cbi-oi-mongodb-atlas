@@ -47,14 +47,12 @@ credentials 'creds_mongodb_atlas' do
   tags 'provider=mongodb_atlas'
 end
 
-=begin
 credentials 'creds_flexera' do
   schemes 'oauth2'
   label 'Flexera'
   description 'The credentials to authenticate API calls to upload bills'
   tags 'provider=flexera'
 end
-=end
 
 pagination 'pagination_mongodb_atlas' do
   get_page_marker do
@@ -79,6 +77,64 @@ datasource 'ds_mongodb_atlas_org_groups' do
       field 'name', from(col_item)
     end
   end
+end
+
+datasource 'ds_mongodb_atlas_org_invoices_index' do
+  request do
+    auth $creds_mongodb_atlas
+    pagination $pagination_mongodb_atlas
+    host 'cloud.mongodb.com'
+    path join(['/api/atlas/v1.0/orgs/', $param_mongodb_atlas_org_id, '/invoices/'])
+    query 'itemsPerPage', '500'
+  end
+  result do
+    collect jq(response, '.results[]') do
+      field 'id', from(col_item)
+      field 'startDate', from(col_item)
+    end
+  end
+end
+
+datasource 'ds_mongodb_atlas_org_invoices_for_last_n_months' do
+  run_script $js_mongodb_atlas_org_invoices_for_last_n_months, $param_months, $ds_mongodb_atlas_org_invoices_index
+end
+
+datasource 'ds_mongodb_atlas_org_invoices' do
+  iterate $ds_mongodb_atlas_org_invoices_for_last_n_months
+  request do
+    auth $creds_mongodb_atlas
+    pagination $pagination_mongodb_atlas
+    host 'cloud.mongodb.com'
+    path join(['/api/atlas/v1.0/orgs/', $param_mongodb_atlas_org_id, '/invoices/', val(iter_item, 'id')])
+  end
+  result do
+    field 'id', from(response)
+    field 'startDate', from(response)
+    field 'lineItems' do
+      collect jq(response, '.lineItems[]') do
+        field 'startDate', from(col_item)
+        field 'endDate', from(col_item)
+        field 'groupId', from(col_item)
+        field 'clusterName', from(col_item)
+        field 'note', from(col_item)
+        field 'sku', from(col_item)
+        field 'discountCents', from(col_item)
+        field 'percentDiscount', from(col_item)
+        field 'quantity', from(col_item)
+        field 'totalPriceCents', from(col_item)
+        field 'unit', from(col_item)
+        field 'unitPriceDollars', from(col_item)
+      end
+    end
+  end
+end
+
+script 'js_mongodb_atlas_org_invoices_for_last_n_months', type: 'javascript' do
+  parameters 'months', 'invoices_index'
+  result 'invoices'
+  code <<-'EOS'
+  var invoices = _.last(_.sortBy(invoices_index, 'startDate'), months);
+  EOS
 end
 
 policy 'mongodb_atlas_cbi_upload' do
