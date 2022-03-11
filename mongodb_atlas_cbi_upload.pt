@@ -137,6 +137,7 @@ script 'js_mongodb_atlas_org_invoices_for_last_n_months', type: 'javascript' do
   parameters 'months', 'invoicesIndex'
   result 'invoices'
   code <<-'EOS'
+  // get the last n months of invoices from the index
   var invoices = _.last(_.sortBy(invoicesIndex, 'startDate'), months);
   EOS
 end
@@ -145,6 +146,7 @@ script 'js_mongodb_atlas_cbi_uploads', type: 'javascript' do
   parameters 'groups', 'invoices'
   result 'uploads'
   code <<-'EOS'
+  // create a map of group (project) names by ID so they can be used in the CBI CSV output
   var groupNamesByID = {};
 
   _.each(groups, function (group) {
@@ -155,9 +157,11 @@ script 'js_mongodb_atlas_cbi_uploads', type: 'javascript' do
   var quoteRE = /[,"\r\n]|^\s/;
   var periodRE = /^(\d+-\d+)-.+$/;
   var uploads = _.map(invoices, function (invoice) {
+    // get the year and month for the invoice in YYYYMM format for use in the CBI CSV output
     var yearMonth = invoice.startDate.replace(yearMonthRE, '$1$2');
     var csv = '';
 
+    // build up the CBI CSV from the line items
     _.each(invoice.lineItems, function (lineItem, index) {
       var item = {
         CloudVendorAccountID: lineItem.groupId,
@@ -174,14 +178,17 @@ script 'js_mongodb_atlas_cbi_uploads', type: 'javascript' do
       }
       var columns = _.keys(item);
 
+      // add the header row just before adding the first line item row
       if (index == 0) {
         csv += columns.join(',') + '\n';
       }
 
+      // add the line item row
       csv += _.map(columns, function(column) {
         var value = item[column];
 
         if (value != null) {
+          // quote and escape values properly for CSV
           if (typeof (value) == 'string' && value.match(quoteRE) != null) {
             return '"' + value.replace('"', '""') + '"';
           }
@@ -194,6 +201,7 @@ script 'js_mongodb_atlas_cbi_uploads', type: 'javascript' do
     });
 
     return {
+      // get the year and month in YYYY-MM format for use with the CBI upload API
       period: invoice.startDate.replace(periodRE, '$1'),
       csv: csv,
     };
