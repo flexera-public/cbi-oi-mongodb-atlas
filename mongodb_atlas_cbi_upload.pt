@@ -129,11 +129,75 @@ datasource 'ds_mongodb_atlas_org_invoices' do
   end
 end
 
+datasource 'ds_mongodb_atlas_cbi_uploads' do
+  run_script $js_mongodb_atlas_cbi_uploads, $ds_mongodb_atlas_org_groups, $ds_mongodb_atlas_org_invoices
+end
+
 script 'js_mongodb_atlas_org_invoices_for_last_n_months', type: 'javascript' do
-  parameters 'months', 'invoices_index'
+  parameters 'months', 'invoicesIndex'
   result 'invoices'
   code <<-'EOS'
-  var invoices = _.last(_.sortBy(invoices_index, 'startDate'), months);
+  var invoices = _.last(_.sortBy(invoicesIndex, 'startDate'), months);
+  EOS
+end
+
+script 'js_mongodb_atlas_cbi_uploads', type: 'javascript' do
+  parameters 'groups', 'invoices'
+  result 'uploads'
+  code <<-'EOS'
+  var groupNamesByID = {};
+
+  _.each(groups, function (group) {
+    groupNamesByID[group.id] = group.name;
+  });
+
+  var yearMonthRE = /^(\d+)-(\d+)-.+$/;
+  var quoteRE = /[,"\r\n]|^\s/;
+  var periodRE = /^(\d+-\d+)-.+$/;
+  var uploads = _.map(invoices, function (invoice) {
+    var yearMonth = invoice.startDate.replace(yearMonthRE, '$1$2');
+    var csv = '';
+
+    _.each(invoice.lineItems, function (lineItem, index) {
+      var item = {
+        CloudVendorAccountID: lineItem.groupId,
+        CloudVendorAccountName: groupNamesByID[lineItem.groupId],
+        ResourceID: lineItem.clusterName,
+        UsageType: lineItem.sku,
+        UsageAmount: lineItem.quantity,
+        UsageUnit: lineItem.unit,
+        Cost: lineItem.totalPriceCents / 100,
+        CurrencyCode: 'USD',
+        UsageStartTime: lineItem.startDate,
+        InvoiceYearMonth: yearMonth,
+        InvoiceID: invoice.id,
+      }
+      var columns = _.keys(item);
+
+      if (index == 0) {
+        csv += columns.join(',') + '\n';
+      }
+
+      csv += _.map(columns, function(column) {
+        var value = item[column];
+
+        if (value != null) {
+          if (typeof (value) == 'string' && value.match(quoteRE) != null) {
+            return '"' + value.replace('"', '""') + '"';
+          }
+
+          return value;
+        }
+
+        return '';
+      }).join(',') + '\n';
+    });
+
+    return {
+      period: invoice.startDate.replace(periodRE, '$1'),
+      csv: csv,
+    };
+  });
   EOS
 end
 
