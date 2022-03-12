@@ -156,6 +156,7 @@ script 'js_mongodb_atlas_cbi_uploads', type: 'javascript' do
   var yearMonthRE = /^(\d+)-(\d+)-.+$/;
   var quoteRE = /[,"\r\n]|^\s/;
   var periodRE = /^(\d+-\d+)-.+$/;
+  var trailingZeroRE = /\.0$/;
   var uploads = _.map(invoices, function (invoice) {
     // get the year and month for the invoice in YYYYMM format for use in the CBI CSV output
     var yearMonth = invoice.startDate.replace(yearMonthRE, '$1$2');
@@ -200,21 +201,91 @@ script 'js_mongodb_atlas_cbi_uploads', type: 'javascript' do
       }).join(',') + '\n';
     });
 
+    // get the human readable size of the CSV
+    var csvSize;
+
+    if (csv.length >= 1024) {
+      var exponent = Math.floor(Math.log(csv.length) / Math.log(1024));
+
+      csvSize = (csv.length / Math.pow(1024, exponent)).toFixed(1).replace(trailingZeroRE, '') + ' ' + 'kMGTP'.charAt(exponent - 1) + 'iB';
+    } else {
+      csvSize = csv.length + ' B';
+    }
+
     return {
       // get the year and month in YYYY-MM format for use with the CBI upload API
       period: invoice.startDate.replace(periodRE, '$1'),
+      recordCount: invoice.lineItems.length,
       csv: csv,
+      csvSize: csvSize,
     };
   });
   EOS
 end
 
 policy 'mongodb_atlas_cbi_upload' do
-  validate $ds_mongodb_atlas_org_groups do
-    summary_template '{{ data | len }} MongoDB Atlas project(s)'
+  validate_each $ds_mongodb_atlas_cbi_uploads do
+    summary_template 'MongoDB Atlas CBI Upload'
     detail_template <<-'EOS'
-There are/is {{ data | len }} MongoDB Atlas project(s)!
+Uploading the following MongoDB Atlas invoice data to CBI:
+
+| Month         | Records            | CSV Size       |
+| ------------- | ------------------ | -------------- |
+{{ range data -}}
+| {{ .period }} | {{ .recordCount }} | {{ .csvSize }} |
+{{ end }}
 EOS
-    check eq(size(data), 0)
+    escalate $escalation_cbi_upload
+    resolve $resolution_email
+    check eq(val(item, 'recordCount'), 0)
+  end
+end
+
+escalation 'escalation_cbi_upload' do
+  automatic true
+  run 'upload_cbi', data, rs_optima_host, rs_org_id, $param_bill_connect_id
+  resolve_incident
+end
+
+resolution 'resolution_email' do
+  automatic true
+  email $param_emails do
+    subject_template 'MongoDB Atlas CBI Upload Completed'
+  end
+end
+
+define upload_cbi($uploads, $rs_optima_host, $rs_org_id, $bill_connect_id) do
+  foreach $upload in $uploads do
+    # TODO
+  end
+end
+
+define create_bill_upload($rs_optima_host, $rs_org_id, $bill_connect_id, $period) return $id do
+  $url = 'https://' + $rs_optima_host + '/optima/orgs/' + $rs_org_id + '/billUploads'
+  $response = http_post(
+    auth: $$creds_flexera,
+    url: $url,
+    body: {
+      billConnectId: $bill_connect_id,
+      billingPeriod: $period
+    }
+  )
+  call check_response($url, $response, 'create bill upload for ' + $period)
+  $id = $response['body']['id']
+end
+
+define upload_file_to_bill_upload($rs_optima_host, $rs_org_id, $bill_upload_id, $file_id, $csv)
+  $url = 'https://' + $rs_optima_host + '/optima/orgs/' + $rs_org_id + '/billUploads/files/' + $file_id
+  $response = http_post(
+    auth: $$creds_flexera,
+    url: $url,
+    body: $csv
+  )
+  call check_response($url, $response, 'upload file to bill upload')
+end
+
+define check_response($url, $response, $request_description) do
+  if $response['code'] > 299 || $response['code'] < 200
+    raise 'Unexpected status code from ' + $request_description + ' (' + $url + ') request: ' + $response['code'] + ' body: ' + to_s($response['body'])
   end
 end
