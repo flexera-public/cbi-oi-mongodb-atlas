@@ -255,8 +255,23 @@ resolution 'resolution_email' do
 end
 
 define upload_cbi($uploads, $rs_optima_host, $rs_org_id, $bill_connect_id) do
+  $$errors = []
+
   foreach $upload in $uploads do
-    # TODO
+    $period = $upload['period']
+
+    sub task_name: 'upload_cbi(' + $period + ')', task_label: 'Uploading MongoDB Atlas CBI for ' + $period, on_error: skip_error_cancel_and_append('uploading MongoDB Atlas CBI for ' + $period) do
+      call create_bill_upload($rs_optima_host, $rs_org_id, $bill_connect_id, $period) retrieve $bill_upload_id
+
+      sub on_rollback: abort_bill_upload($rs_optima_host, $rs_org_id, $bill_connect_id) do
+        call upload_file_to_bill_upload($rs_optima_host, $rs_org_id, $bill_connect_id, 'bill-' + $period + '.csv', $upload['csv'])
+        call commit_bill_upload($rs_optima_host, $rs_org_id, $bill_connect_id)
+      end
+    end
+  end
+
+  if size($$errors) > 0
+    raise join($$errors, "\n")
   end
 end
 
@@ -274,7 +289,7 @@ define create_bill_upload($rs_optima_host, $rs_org_id, $bill_connect_id, $period
   $id = $response['body']['id']
 end
 
-define upload_file_to_bill_upload($rs_optima_host, $rs_org_id, $bill_upload_id, $file_id, $csv)
+define upload_file_to_bill_upload($rs_optima_host, $rs_org_id, $bill_upload_id, $file_id, $csv) do
   $url = 'https://' + $rs_optima_host + '/optima/orgs/' + $rs_org_id + '/billUploads/files/' + $file_id
   $response = http_post(
     auth: $$creds_flexera,
@@ -284,8 +299,34 @@ define upload_file_to_bill_upload($rs_optima_host, $rs_org_id, $bill_upload_id, 
   call check_response($url, $response, 'upload file to bill upload')
 end
 
+define perform_operation_on_bill_upload($rs_optima_host, $rs_org_id, $bill_upload_id, $operation) do
+  $url = 'https://' + $rs_optima_host + '/optima/orgs/' + $rs_org_id + '/billUploads/operations'
+  $response = http_post(
+    auth: $$creds_flexera,
+    url: $url,
+    body: {
+      operation: $operation
+    }
+  )
+  call check_response($url, $response, $operation + ' bill upload')
+end
+
+define commit_bill_upload($rs_optima_host, $rs_org_id, $bill_upload_id) do
+  call perform_operation_on_bill_upload($rs_optima_host, $rs_org_id, $bill_upload_id, 'commit')
+end
+
+define abort_bill_upload($rs_optima_host, $rs_org_id, $bill_upload_id) do
+  call perform_operation_on_bill_upload($rs_optima_host, $rs_org_id, $bill_upload_id, 'abort')
+end
+
 define check_response($url, $response, $request_description) do
   if $response['code'] > 299 || $response['code'] < 200
     raise 'Unexpected status code from ' + $request_description + ' (' + $url + ') request: ' + $response['code'] + ' body: ' + to_s($response['body'])
   end
+end
+
+define skip_error_cancel_and_append($subject) do
+  cancel_task
+  $$errors << 'Unexpected error for ' + $subject + "\n  " + to_s($_error)
+  $_error_behavior = 'skip'
 end
