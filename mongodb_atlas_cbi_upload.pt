@@ -133,6 +133,58 @@ datasource 'ds_mongodb_atlas_cbi_uploads' do
   run_script $js_mongodb_atlas_cbi_uploads, $ds_mongodb_atlas_org_groups, $ds_mongodb_atlas_org_invoices
 end
 
+datasource 'ds_create_bill_upload' do
+  iterate $ds_mongodb_atlas_cbi_uploads
+  request do
+    auth $creds_flexera
+    host rs_optima_host
+    verb 'POST'
+    path join(['/optima/orgs/', rs_org_id, '/billUploads'])
+    body_field 'billConnectId', $param_bill_connect_id
+    body_field 'billingPeriod', val(iter_item, 'period')
+  end
+  result do
+    field 'id', from(response)
+    field 'period', from(iter_item)
+    field 'recordCount', from(iter_item)
+    field 'csv', from(iter_item)
+    field 'csvSize', from(iter_item)
+  end
+end
+
+datasource 'ds_upload_file_to_bill_upload' do
+  iterate $ds_create_bill_upload
+  request do
+    auth $creds_flexera
+    host rs_optima_host
+    verb 'POST'
+    path join(['/optima/orgs/', rs_org_id, '/billUploads/', val(iter_item, 'id'), '/files/bill-', val(iter_item, 'period'), '.csv'])
+    body val(iter_item, 'csv')
+  end
+  result do
+    field 'id', from(iter_item)
+    field 'period', from(iter_item)
+    field 'recordCount', from(iter_item)
+    field 'csvSize', from(iter_item)
+  end
+end
+
+datasource 'ds_commit_bill_upload' do
+  iterate $ds_upload_file_to_bill_upload
+  request do
+    auth $creds_flexera
+    host rs_optima_host
+    verb 'POST'
+    path join(['/optima/orgs/', rs_org_id, '/billUploads/', val(iter_item, 'id'), '/operations'])
+    body_field 'operation', 'commit'
+  end
+  result do
+    field 'period', from(iter_item)
+    field 'recordCount', from(iter_item)
+    field 'csvSize', from(iter_item)
+  end
+end
+
 script 'js_mongodb_atlas_org_invoices_for_last_n_months', type: 'javascript' do
   parameters 'months', 'invoicesIndex'
   result 'invoices'
@@ -157,7 +209,7 @@ script 'js_mongodb_atlas_cbi_uploads', type: 'javascript' do
   var quoteRE = /[,"\r\n]|^\s/;
   var periodRE = /^(\d+-\d+)-.+$/;
   var trailingZeroRE = /\.0$/;
-  var uploads = _.map(invoices, function (invoice) {
+  var uploads = _.compact(_.map(invoices, function (invoice) {
     // get the year and month for the invoice in YYYYMM format for use in the CBI CSV output
     var yearMonth = invoice.startDate.replace(yearMonthRE, '$1$2');
     var csv = '';
@@ -201,30 +253,32 @@ script 'js_mongodb_atlas_cbi_uploads', type: 'javascript' do
       }).join(',') + '\n';
     });
 
-    // get the human readable size of the CSV
-    var csvSize;
+    if (csv.length > 0) {
+      // get the human readable size of the CSV
+      var csvSize;
 
-    if (csv.length >= 1024) {
-      var exponent = Math.floor(Math.log(csv.length) / Math.log(1024));
+      if (csv.length >= 1024) {
+        var exponent = Math.floor(Math.log(csv.length) / Math.log(1024));
 
-      csvSize = (csv.length / Math.pow(1024, exponent)).toFixed(1).replace(trailingZeroRE, '') + ' ' + 'kMGTP'.charAt(exponent - 1) + 'iB';
-    } else {
-      csvSize = csv.length + ' B';
+        csvSize = (csv.length / Math.pow(1024, exponent)).toFixed(1).replace(trailingZeroRE, '') + ' ' + 'kMGTP'.charAt(exponent - 1) + 'iB';
+      } else {
+        csvSize = csv.length + ' B';
+      }
+
+      return {
+        // get the year and month in YYYY-MM format for use with the CBI upload API
+        period: invoice.startDate.replace(periodRE, '$1'),
+        recordCount: invoice.lineItems.length,
+        csv: csv,
+        csvSize: csvSize,
+      };
     }
-
-    return {
-      // get the year and month in YYYY-MM format for use with the CBI upload API
-      period: invoice.startDate.replace(periodRE, '$1'),
-      recordCount: invoice.lineItems.length,
-      csv: csv,
-      csvSize: csvSize,
-    };
-  });
+  }));
   EOS
 end
 
 policy 'mongodb_atlas_cbi_upload' do
-  validate_each $ds_mongodb_atlas_cbi_uploads do
+  validate $ds_commit_bill_upload do
     summary_template 'MongoDB Atlas CBI Upload'
     detail_template <<-'EOS'
 Uploading the following MongoDB Atlas invoice data to CBI:
@@ -237,13 +291,12 @@ Uploading the following MongoDB Atlas invoice data to CBI:
 EOS
     escalate $escalation_cbi_upload
     resolve $resolution_email
-    check eq(val(item, 'recordCount'), 0)
+    check eq(size(data), 0)
   end
 end
 
 escalation 'escalation_cbi_upload' do
   automatic true
-  run 'upload_cbi', data, rs_optima_host, rs_org_id, $param_bill_connect_id
   resolve_incident
 end
 
@@ -252,81 +305,4 @@ resolution 'resolution_email' do
   email $param_emails do
     subject_template 'MongoDB Atlas CBI Upload Completed'
   end
-end
-
-define upload_cbi($uploads, $rs_optima_host, $rs_org_id, $bill_connect_id) do
-  $$errors = []
-
-  foreach $upload in $uploads do
-    $period = $upload['period']
-
-    sub task_name: 'upload_cbi(' + $period + ')', task_label: 'Uploading MongoDB Atlas CBI for ' + $period, on_error: skip_error_cancel_and_append('uploading MongoDB Atlas CBI for ' + $period) do
-      call create_bill_upload($rs_optima_host, $rs_org_id, $bill_connect_id, $period) retrieve $bill_upload_id
-
-      sub on_rollback: abort_bill_upload($rs_optima_host, $rs_org_id, $bill_connect_id) do
-        call upload_file_to_bill_upload($rs_optima_host, $rs_org_id, $bill_connect_id, 'bill-' + $period + '.csv', $upload['csv'])
-        call commit_bill_upload($rs_optima_host, $rs_org_id, $bill_connect_id)
-      end
-    end
-  end
-
-  if size($$errors) > 0
-    raise join($$errors, "\n")
-  end
-end
-
-define create_bill_upload($rs_optima_host, $rs_org_id, $bill_connect_id, $period) return $id do
-  $url = 'https://' + $rs_optima_host + '/optima/orgs/' + $rs_org_id + '/billUploads'
-  $response = http_post(
-    auth: $$creds_flexera,
-    url: $url,
-    body: {
-      billConnectId: $bill_connect_id,
-      billingPeriod: $period
-    }
-  )
-  call check_response($url, $response, 'create bill upload for ' + $period)
-  $id = $response['body']['id']
-end
-
-define upload_file_to_bill_upload($rs_optima_host, $rs_org_id, $bill_upload_id, $file_id, $csv) do
-  $url = 'https://' + $rs_optima_host + '/optima/orgs/' + $rs_org_id + '/billUploads/files/' + $file_id
-  $response = http_post(
-    auth: $$creds_flexera,
-    url: $url,
-    body: $csv
-  )
-  call check_response($url, $response, 'upload file to bill upload')
-end
-
-define perform_operation_on_bill_upload($rs_optima_host, $rs_org_id, $bill_upload_id, $operation) do
-  $url = 'https://' + $rs_optima_host + '/optima/orgs/' + $rs_org_id + '/billUploads/operations'
-  $response = http_post(
-    auth: $$creds_flexera,
-    url: $url,
-    body: {
-      operation: $operation
-    }
-  )
-  call check_response($url, $response, $operation + ' bill upload')
-end
-
-define commit_bill_upload($rs_optima_host, $rs_org_id, $bill_upload_id) do
-  call perform_operation_on_bill_upload($rs_optima_host, $rs_org_id, $bill_upload_id, 'commit')
-end
-
-define abort_bill_upload($rs_optima_host, $rs_org_id, $bill_upload_id) do
-  call perform_operation_on_bill_upload($rs_optima_host, $rs_org_id, $bill_upload_id, 'abort')
-end
-
-define check_response($url, $response, $request_description) do
-  if $response['code'] > 299 || $response['code'] < 200
-    raise 'Unexpected status code from ' + $request_description + ' (' + $url + ') request: ' + $response['code'] + ' body: ' + to_s($response['body'])
-  end
-end
-
-define skip_error_cancel_and_append($subject) do
-  cancel_task
-  $$errors << 'Unexpected error for ' + $subject + "\n  " + to_s($_error)
-  $_error_behavior = 'skip'
 end
