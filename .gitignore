@@ -1,0 +1,4 @@
+.vscode/
+datasource_*.json
+out.json
+*.csv
