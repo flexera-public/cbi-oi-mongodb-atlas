@@ -8,13 +8,6 @@ info(
   provider: 'MongoDB Atlas',
 )
 
-parameter 'param_emails' do
-  type 'list'
-  label 'Email Addresses'
-  category 'Notification'
-  description 'The list of email addresses to notify'
-end
-
 parameter 'param_mongodb_atlas_org_id' do
   type 'string'
   label 'MongoDB Atlas Organization ID'
@@ -38,6 +31,13 @@ parameter 'param_bill_connect_id' do
   category 'Flexera'
   description 'The ID of the CBI Bill Connect for uploading bills'
   allowed_pattern /^cbi-oi-optima-[-_0-9a-zA-Z]{1,20}$/
+end
+
+parameter 'param_emails' do
+  type 'list'
+  label 'Email Addresses'
+  category 'Notification'
+  description 'The list of email addresses to notify'
 end
 
 credentials 'creds_mongodb_atlas' do
